@@ -1,0 +1,903 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NEON HAND — Gesture Canvas</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap');
+
+:root {
+  --cyan:#00ffe7; --pink:#ff2d78; --yellow:#ffe600;
+  --green:#39ff14; --bg:#050510;
+  --panel:rgba(0,255,231,0.04); --border:rgba(0,255,231,0.15);
+  --ink:#00ffe7;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+
+/* cursor:none globally — switched to 'default' in grab mode */
+body {
+  background:var(--bg); font-family:'Share Tech Mono',monospace;
+  overflow:hidden; height:100vh; width:100vw;
+  display:flex; flex-direction:column; align-items:center;
+  color:var(--cyan); cursor:none;
+}
+body.sys-cursor, body.sys-cursor * { cursor:default !important; }
+
+/* scanlines + grid */
+body::before {
+  content:''; position:fixed; inset:0; pointer-events:none; z-index:9000;
+  background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.06) 2px,rgba(0,0,0,0.06) 4px);
+}
+body::after {
+  content:''; position:fixed; inset:0; pointer-events:none; z-index:0;
+  background-image:linear-gradient(rgba(0,255,231,0.03) 1px,transparent 1px),linear-gradient(90deg,rgba(0,255,231,0.03) 1px,transparent 1px);
+  background-size:40px 40px;
+}
+
+/* ── NEON CURSOR (index fingertip) ── */
+#cur {
+  position:fixed; width:28px; height:28px;
+  pointer-events:none; z-index:9998;
+  transform:translate(-50%,-50%);
+  display:none; /* hidden until hand detected */
+}
+#cur.show { display:block; }
+#cur .ring {
+  position:absolute; inset:0; border-radius:50%;
+  border:2px solid var(--ink);
+  box-shadow:0 0 10px var(--ink), 0 0 26px var(--ink);
+  animation:rPulse 1.8s ease-in-out infinite;
+}
+#cur .dot {
+  position:absolute; width:6px; height:6px; border-radius:50%;
+  background:var(--ink); box-shadow:0 0 8px var(--ink);
+  top:50%; left:50%; transform:translate(-50%,-50%);
+}
+@keyframes rPulse { 0%,100%{transform:scale(1);opacity:1} 50%{transform:scale(1.2);opacity:.6} }
+
+/* trail dots */
+.tr { position:fixed; border-radius:50%; pointer-events:none; z-index:9996; display:none; }
+
+/* ── PERM SCREEN ── */
+#permScreen {
+  position:fixed; inset:0; background:var(--bg); z-index:20000;
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:18px;
+}
+.pg {
+  width:100px; height:100px; border-radius:50%;
+  border:2px solid var(--cyan);
+  box-shadow:0 0 28px var(--cyan),0 0 70px rgba(0,255,231,.2);
+  display:flex; align-items:center; justify-content:center;
+  animation:pglow 2.5s ease-in-out infinite; position:relative;
+}
+@keyframes pglow{0%,100%{box-shadow:0 0 28px var(--cyan),0 0 70px rgba(0,255,231,.2)}50%{box-shadow:0 0 50px var(--cyan),0 0 120px rgba(0,255,231,.35)}}
+.pg::before,.pg::after{content:'';position:absolute;border-radius:50%;border:1px solid rgba(0,255,231,.15);animation:pgring 2.5s ease-in-out infinite;}
+.pg::before{inset:-14px;} .pg::after{inset:-28px;animation-delay:.4s;}
+@keyframes pgring{0%,100%{transform:scale(1);opacity:.8}50%{transform:scale(1.05);opacity:.3}}
+.camico{font-size:2.5rem;filter:drop-shadow(0 0 10px var(--cyan));}
+.ptitle{font-family:'Orbitron',monospace;font-weight:900;font-size:clamp(1.1rem,3vw,1.7rem);letter-spacing:.3em;color:var(--cyan);text-shadow:0 0 10px var(--cyan);text-align:center;}
+.psub{font-size:.65rem;letter-spacing:.14em;color:rgba(0,255,231,.45);text-align:center;max-width:340px;line-height:1.7;}
+.pfeats{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;max-width:400px;}
+.pfeat{background:rgba(0,255,231,.04);border:1px solid rgba(0,255,231,.12);border-radius:4px;padding:6px 10px;font-size:.53rem;letter-spacing:.1em;color:rgba(0,255,231,.5);display:flex;align-items:center;gap:5px;}
+.pnote{font-size:.5rem;letter-spacing:.1em;color:rgba(0,255,231,.24);text-align:center;max-width:320px;line-height:1.6;border-top:1px solid rgba(0,255,231,.08);padding-top:10px;}
+#allowBtn{
+  background:transparent; border:2px solid var(--cyan); border-radius:4px;
+  padding:12px 36px; font-family:'Orbitron',monospace; font-weight:700;
+  font-size:.7rem; letter-spacing:.22em; color:var(--cyan); cursor:pointer;
+  box-shadow:0 0 18px rgba(0,255,231,.2); transition:all .25s; position:relative; overflow:hidden;
+}
+#allowBtn:hover{box-shadow:0 0 32px rgba(0,255,231,.45);text-shadow:0 0 10px var(--cyan);}
+#allowBtn:disabled{opacity:.5;cursor:not-allowed;}
+#permErr{display:none;background:rgba(255,45,120,.06);border:1px solid rgba(255,45,120,.3);border-radius:4px;padding:8px 16px;font-size:.55rem;color:var(--pink);text-align:center;max-width:340px;line-height:1.5;}
+
+/* ── LOADING ── */
+#loader{position:fixed;inset:0;background:var(--bg);z-index:19000;display:none;flex-direction:column;align-items:center;justify-content:center;gap:12px;}
+.ltitle{font-family:'Orbitron',monospace;font-weight:900;font-size:clamp(1.2rem,3vw,1.9rem);color:var(--cyan);text-shadow:0 0 18px var(--cyan);letter-spacing:.3em;}
+.lsub{font-size:.6rem;letter-spacing:.18em;color:rgba(0,255,231,.35);}
+.lbar{width:200px;height:2px;background:rgba(0,255,231,.08);border-radius:2px;overflow:hidden;}
+.lfill{height:100%;background:var(--cyan);box-shadow:0 0 7px var(--cyan);width:0%;transition:width .35s;}
+.spin{width:28px;height:28px;border:2px solid rgba(0,255,231,.1);border-top:2px solid var(--cyan);border-radius:50%;animation:spin .75s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── HEADER ── */
+header{position:relative;z-index:10;text-align:center;padding:8px 0 4px;width:100%;}
+header h1{font-family:'Orbitron',monospace;font-weight:900;font-size:clamp(.8rem,2.2vw,1.4rem);letter-spacing:.3em;color:var(--cyan);text-shadow:0 0 8px var(--cyan),0 0 22px var(--cyan);animation:flicker 7s infinite;}
+header p{font-size:.52rem;letter-spacing:.16em;color:rgba(0,255,231,.34);margin-top:1px;}
+@keyframes flicker{0%,96%,100%{opacity:1}97%{opacity:.8}99%{opacity:.6}}
+
+/* ── LAYOUT ── */
+.main{position:relative;z-index:10;display:flex;gap:8px;padding:0 8px;width:100%;flex:1;min-height:0;}
+
+/* ── CANVAS ── */
+.cw{position:relative;flex:1;min-width:0;height:100%;border:1px solid var(--border);border-radius:4px;overflow:hidden;box-shadow:inset 0 0 40px rgba(0,0,0,.5),0 0 25px rgba(0,255,231,.05);}
+#drawCanvas,#overlayCanvas{position:absolute;inset:0;width:100%;height:100%;}
+#drawCanvas{cursor:none;}
+body.sys-cursor #drawCanvas{cursor:default;}
+#overlayCanvas{pointer-events:none;z-index:3;}
+.cc{position:absolute;width:13px;height:13px;z-index:5;pointer-events:none;}
+.cc.tl{top:5px;left:5px;border-top:2px solid var(--cyan);border-left:2px solid var(--cyan);}
+.cc.tr{top:5px;right:5px;border-top:2px solid var(--cyan);border-right:2px solid var(--cyan);}
+.cc.bl{bottom:5px;left:5px;border-bottom:2px solid var(--cyan);border-left:2px solid var(--cyan);}
+.cc.br{bottom:5px;right:5px;border-bottom:2px solid var(--cyan);border-right:2px solid var(--cyan);}
+
+/* mode badge */
+.badge{position:absolute;top:8px;left:50%;transform:translateX(-50%);z-index:7;font-family:'Orbitron',monospace;font-size:.48rem;letter-spacing:.18em;padding:3px 12px;border-radius:20px;pointer-events:none;opacity:0;transition:opacity .2s;}
+.badge.draw{opacity:1;background:rgba(0,255,231,.08);border:1px solid var(--cyan);color:var(--cyan);box-shadow:0 0 10px rgba(0,255,231,.25);text-shadow:0 0 7px var(--cyan);}
+.badge.grab{opacity:1;background:rgba(255,230,0,.08);border:1px solid var(--yellow);color:var(--yellow);box-shadow:0 0 10px rgba(255,230,0,.25);text-shadow:0 0 7px var(--yellow);}
+
+/* ── PIP camera ── */
+#pip{position:absolute;bottom:10px;right:10px;width:190px;height:140px;border:1px solid rgba(0,255,231,.45);border-radius:5px;overflow:hidden;z-index:8;background:#000;box-shadow:0 0 18px rgba(0,255,231,.2);}
+#pip video{width:100%;height:100%;object-fit:cover;transform:scaleX(-1);opacity:.82;}
+#pip canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:2;}
+#pip .plbl{position:absolute;top:3px;left:6px;font-family:'Orbitron',monospace;font-size:.33rem;letter-spacing:.12em;color:rgba(0,255,231,.7);z-index:3;}
+#pip .prec{position:absolute;top:5px;right:6px;width:5px;height:5px;border-radius:50%;background:var(--pink);box-shadow:0 0 7px var(--pink);animation:blink 1s infinite;z-index:3;}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.1}}
+#pipBtn{position:absolute;bottom:10px;right:206px;z-index:8;background:rgba(0,255,231,.06);border:1px solid rgba(0,255,231,.2);border-radius:3px;color:rgba(0,255,231,.45);font-family:'Share Tech Mono',monospace;font-size:.44rem;padding:3px 6px;cursor:pointer;transition:all .2s;}
+#pipBtn:hover{color:var(--cyan);border-color:var(--cyan);}
+
+/* ── PANEL ── */
+.panel{width:130px;flex-shrink:0;display:flex;flex-direction:column;gap:7px;padding:7px 0;height:100%;overflow-y:auto;}
+.panel::-webkit-scrollbar{width:2px;}
+.panel::-webkit-scrollbar-thumb{background:var(--cyan);}
+.ps{background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:7px;}
+.sl{font-family:'Orbitron',monospace;font-size:.42rem;letter-spacing:.18em;color:rgba(0,255,231,.38);margin-bottom:6px;}
+.colors{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;}
+.sw{width:100%;aspect-ratio:1;border-radius:3px;cursor:pointer;border:2px solid transparent;transition:all .18s;position:relative;}
+.sw:hover,.sw.on{border-color:#fff;transform:scale(1.1);}
+.sw.on::after{content:'';position:absolute;inset:-5px;border-radius:5px;border:1px solid rgba(255,255,255,.45);animation:pr 1.5s infinite;}
+@keyframes pr{0%{opacity:1;transform:scale(1)}100%{opacity:0;transform:scale(1.4)}}
+.bsizes{display:flex;flex-direction:column;gap:3px;}
+.bb{background:transparent;border:1px solid var(--border);border-radius:3px;cursor:pointer;display:flex;align-items:center;gap:6px;padding:3px 6px;color:rgba(0,255,231,.5);font-family:'Share Tech Mono',monospace;font-size:.55rem;transition:all .18s;}
+.bb:hover,.bb.on{border-color:var(--ink);color:var(--ink);background:rgba(0,255,231,.05);}
+.bd{border-radius:50%;background:currentColor;flex-shrink:0;}
+.ab{width:100%;padding:6px 4px;background:transparent;border-radius:3px;cursor:pointer;font-family:'Orbitron',monospace;font-size:.46rem;letter-spacing:.1em;font-weight:700;transition:all .18s;text-align:center;}
+.acl{border:1px solid var(--pink);color:var(--pink);}
+.acl:hover{background:rgba(255,45,120,.1);box-shadow:0 0 12px rgba(255,45,120,.35);}
+.asv{border:1px solid var(--green);color:var(--green);margin-top:2px;}
+.asv:hover{background:rgba(57,255,20,.07);box-shadow:0 0 12px rgba(57,255,20,.25);}
+.gi{display:flex;align-items:center;gap:5px;margin-bottom:4px;font-size:.5rem;color:rgba(0,255,231,.44);line-height:1.3;}
+.gico{font-size:.82rem;flex-shrink:0;}
+
+/* ── STATUS ── */
+.sbar{border-top:1px solid var(--border);padding:3px 10px;font-size:.52rem;letter-spacing:.1em;color:rgba(0,255,231,.3);display:flex;justify-content:space-between;z-index:10;position:relative;}
+
+/* hidden video */
+#rawVideo{display:none;}
+</style>
+</head>
+<body>
+
+<!-- Neon cursor (index fingertip) -->
+<div id="cur">
+  <div class="ring"></div>
+  <div class="dot"></div>
+</div>
+
+<!-- Permission screen -->
+<div id="permScreen">
+  <div class="pg"><div class="camico">📷</div></div>
+  <div class="ptitle">CAMERA ACCESS<br>REQUIRED</div>
+  <div class="psub">NEON HAND tracks your hand in real-time.<br>Video <strong style="color:var(--cyan)">never leaves your device</strong> — all local.</div>
+  <div class="pfeats">
+    <div class="pfeat"><span>☝️</span>Index up = draw</div>
+    <div class="pfeat"><span>🤏</span>Pinch thumb+index = grab</div>
+    <div class="pfeat"><span>🖱️</span>Pick mode = mouse free</div>
+    <div class="pfeat"><span>🔒</span>100% local</div>
+  </div>
+  <button id="allowBtn">⬡ ALLOW CAMERA ACCESS</button>
+  <div id="permErr"></div>
+  <div class="pnote">Your browser will show a permission popup — click <strong style="color:rgba(0,255,231,.55)">"Allow"</strong> to begin.</div>
+</div>
+
+<!-- Loader -->
+<div id="loader">
+  <div class="spin"></div>
+  <div class="ltitle">NEON HAND</div>
+  <div class="lsub">INITIALIZING HAND TRACKING</div>
+  <div class="lbar"><div class="lfill" id="lfill"></div></div>
+  <div class="lsub" id="lstep">LOADING...</div>
+</div>
+
+<video id="rawVideo" autoplay playsinline muted></video>
+
+<header>
+  <h1>✦ NEON HAND ✦</h1>
+  <p>INDEX FINGER = DRAW &nbsp;|&nbsp; PINCH THUMB+INDEX = GRAB &nbsp;|&nbsp; GRAB MODE = MOUSE FREE</p>
+</header>
+
+<div class="main">
+  <!-- Side panel -->
+  <div class="panel">
+    <div class="ps">
+      <div class="sl">// COLOR</div>
+      <div class="colors" id="palette">
+        <div class="sw on"  data-c="#00ffe7" style="background:#00ffe7;box-shadow:0 0 7px #00ffe7"></div>
+        <div class="sw" data-c="#ff2d78" style="background:#ff2d78;box-shadow:0 0 7px #ff2d78"></div>
+        <div class="sw" data-c="#ffe600" style="background:#ffe600;box-shadow:0 0 7px #ffe600"></div>
+        <div class="sw" data-c="#39ff14" style="background:#39ff14;box-shadow:0 0 7px #39ff14"></div>
+        <div class="sw" data-c="#bf00ff" style="background:#bf00ff;box-shadow:0 0 7px #bf00ff"></div>
+        <div class="sw" data-c="#ff6a00" style="background:#ff6a00;box-shadow:0 0 7px #ff6a00"></div>
+        <div class="sw" data-c="#ffffff" style="background:#fff;box-shadow:0 0 7px #fff"></div>
+        <div class="sw" data-c="#00b4ff" style="background:#00b4ff;box-shadow:0 0 7px #00b4ff"></div>
+        <div class="sw" data-c="#ff007f" style="background:#ff007f;box-shadow:0 0 7px #ff007f"></div>
+      </div>
+    </div>
+    <div class="ps">
+      <div class="sl">// BRUSH</div>
+      <div class="bsizes">
+        <button class="bb" data-sz="3"><div class="bd" style="width:3px;height:3px"></div>FINE</button>
+        <button class="bb on" data-sz="6"><div class="bd" style="width:6px;height:6px"></div>MED</button>
+        <button class="bb" data-sz="12"><div class="bd" style="width:10px;height:10px"></div>WIDE</button>
+        <button class="bb" data-sz="22"><div class="bd" style="width:14px;height:14px"></div>THICK</button>
+      </div>
+    </div>
+    <div class="ps">
+      <div class="sl">// GESTURES</div>
+      <div class="gi"><span class="gico">☝️</span>index up = draw</div>
+      <div class="gi"><span class="gico">🤏</span>pinch = grab/move</div>
+      <div class="gi"><span class="gico">✋</span>open hand = idle</div>
+    </div>
+    <div class="ps">
+      <div class="sl">// ACTIONS</div>
+      <button class="ab acl" id="clearBtn">⬛ CLEAR ALL</button>
+      <button class="ab asv" id="saveBtn">⬇ SAVE PNG</button>
+    </div>
+  </div>
+
+  <!-- Canvas area -->
+  <div class="cw" id="cw">
+    <div class="cc tl"></div><div class="cc tr"></div>
+    <div class="cc bl"></div><div class="cc br"></div>
+    <canvas id="drawCanvas"></canvas>
+    <canvas id="overlayCanvas"></canvas>
+    <div class="badge" id="badge"></div>
+    <!-- PIP live camera -->
+    <div id="pip">
+      <video id="pipVid" autoplay playsinline muted></video>
+      <canvas id="pipCvs"></canvas>
+      <div class="plbl">◈ LIVE CAM</div>
+      <div class="prec"></div>
+    </div>
+    <button id="pipBtn">CAM</button>
+  </div>
+</div>
+
+<div class="sbar">
+  <span id="stxt">WAITING FOR CAMERA...</span>
+  <span id="fps">-- FPS</span>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+<script>
+'use strict';
+
+// ═══════════════════════════════════════════════════════
+// ONE-EURO FILTER  (Casiez et al. 2012)
+// Best algorithm for low-latency pointer smoothing
+// ═══════════════════════════════════════════════════════
+class OEF {
+  constructor(minCutoff=1, beta=0.007, dCutoff=1){
+    this.minCutoff=minCutoff; this.beta=beta; this.dCutoff=dCutoff;
+    this.x=null; this.dx=0; this.t=null;
+  }
+  alpha(cutoff, dt){ const tau=1/(2*Math.PI*cutoff); return 1/(1+tau/dt); }
+  run(x, t){
+    if(this.x===null){ this.x=x; this.t=t; return x; }
+    const dt=(t-this.t)/1000; this.t=t;
+    if(dt<=0) return this.x;
+    const edx = this.dx + this.alpha(this.dCutoff,dt)*((x-this.x)/dt - this.dx);
+    const cutoff = this.minCutoff + this.beta*Math.abs(edx);
+    this.x = this.x + this.alpha(cutoff,dt)*(x-this.x);
+    this.dx = edx;
+    return this.x;
+  }
+  reset(){ this.x=null; this.dx=0; this.t=null; }
+}
+
+// One filter per landmark per axis  (21 landmarks × x,y)
+const LF = Array.from({length:21}, ()=>({
+  x: new OEF(1.2, 0.05),
+  y: new OEF(1.2, 0.05),
+}));
+// Separate fast filter for the screen cursor (index tip)
+const CF = { x: new OEF(2.5, 0.15), y: new OEF(2.5, 0.15) };
+
+function filterLM(raw, t){
+  return raw.map((lm,i)=>({
+    x: LF[i].x.run(lm.x, t),
+    y: LF[i].y.run(lm.y, t),
+    z: lm.z
+  }));
+}
+function resetFilters(){
+  LF.forEach(f=>{ f.x.reset(); f.y.reset(); });
+  CF.x.reset(); CF.y.reset();
+}
+
+// ═══════════════════════════════════════════════════════
+// HAND CONNECTIONS for skeleton draw
+// ═══════════════════════════════════════════════════════
+const CONN = [
+  [0,1],[1,2],[2,3],[3,4],
+  [0,5],[5,6],[6,7],[7,8],
+  [5,9],[9,10],[10,11],[11,12],
+  [9,13],[13,14],[14,15],[15,16],
+  [13,17],[17,18],[18,19],[19,20],[0,17]
+];
+const TIPS = [4,8,12,16,20];
+
+// ═══════════════════════════════════════════════════════
+// APP STATE
+// ═══════════════════════════════════════════════════════
+const A = {
+  color: '#00ffe7',
+  brushSz: 6,
+  mode: 'idle',         // 'draw' | 'grab' | 'idle'
+  strokes: [],          // completed strokes
+  live: null,           // current in-progress stroke
+  grabbed: -1,          // index of grabbed stroke (-1 = none)
+  grabOff: [],          // offsets from grab center to each point
+  fps: 0, fpsT: performance.now(), fpsN: 0,
+  // mode debounce
+  modeBuf: [],
+  DEBOUNCE: 5,
+};
+
+// ═══════════════════════════════════════════════════════
+// ELEMENTS
+// ═══════════════════════════════════════════════════════
+const rawVideo  = document.getElementById('rawVideo');
+const pipVid    = document.getElementById('pipVid');
+const pipCvs    = document.getElementById('pipCvs');
+const pCtx      = pipCvs.getContext('2d');
+const drawCvs   = document.getElementById('drawCanvas');
+const overCvs   = document.getElementById('overlayCanvas');
+const dCtx      = drawCvs.getContext('2d');
+const oCtx      = overCvs.getContext('2d');
+const badge     = document.getElementById('badge');
+const stxt      = document.getElementById('stxt');
+const fpsEl     = document.getElementById('fps');
+const cwEl      = document.getElementById('cw');
+const curEl     = document.getElementById('cur');
+const curRing   = curEl.querySelector('.ring');
+const curDot    = curEl.querySelector('.dot');
+
+// ═══════════════════════════════════════════════════════
+// RESIZE
+// ═══════════════════════════════════════════════════════
+function resize(){
+  const r = cwEl.getBoundingClientRect();
+  drawCvs.width = overCvs.width = r.width;
+  drawCvs.height = overCvs.height = r.height;
+  pipCvs.width  = document.getElementById('pip').clientWidth;
+  pipCvs.height = document.getElementById('pip').clientHeight;
+  redrawAll();
+}
+window.addEventListener('resize', resize);
+
+// ═══════════════════════════════════════════════════════
+// PIP TOGGLE
+// ═══════════════════════════════════════════════════════
+const pipDiv = document.getElementById('pip');
+const pipBtn = document.getElementById('pipBtn');
+let pipOn = true;
+pipBtn.addEventListener('click', ()=>{
+  pipOn = !pipOn;
+  pipDiv.style.opacity = pipOn ? '1' : '0';
+  pipBtn.textContent = pipOn ? 'CAM' : 'CAM✗';
+});
+
+// ═══════════════════════════════════════════════════════
+// COLOR / BRUSH
+// ═══════════════════════════════════════════════════════
+document.querySelectorAll('.sw').forEach(s=>{
+  s.addEventListener('click', ()=>{
+    document.querySelectorAll('.sw').forEach(x=>x.classList.remove('on'));
+    s.classList.add('on');
+    A.color = s.dataset.c;
+    document.documentElement.style.setProperty('--ink', A.color);
+    curRing.style.borderColor = A.color;
+    curRing.style.boxShadow = `0 0 10px ${A.color}, 0 0 26px ${A.color}`;
+    curDot.style.background = A.color;
+    curDot.style.boxShadow  = `0 0 8px ${A.color}`;
+  });
+});
+document.querySelectorAll('.bb').forEach(b=>{
+  b.addEventListener('click', ()=>{
+    document.querySelectorAll('.bb').forEach(x=>x.classList.remove('on'));
+    b.classList.add('on');
+    A.brushSz = parseInt(b.dataset.sz);
+  });
+});
+document.getElementById('clearBtn').addEventListener('click', ()=>{
+  A.strokes=[]; A.live=null;
+  dCtx.clearRect(0,0,drawCvs.width,drawCvs.height);
+  setS('CANVAS CLEARED', '#ff2d78');
+});
+document.getElementById('saveBtn').addEventListener('click', ()=>{
+  const a=document.createElement('a'); a.download='neon-hand.png';
+  a.href=drawCvs.toDataURL(); a.click();
+  setS('SAVED ✓', '#39ff14');
+});
+
+// ═══════════════════════════════════════════════════════
+// DRAWING
+// ═══════════════════════════════════════════════════════
+function redrawAll(){
+  dCtx.clearRect(0,0,drawCvs.width,drawCvs.height);
+  A.strokes.forEach(paintStroke);
+}
+function paintStroke(s){
+  if(!s || s.pts.length < 2) return;
+  dCtx.save();
+  dCtx.strokeStyle = s.color;
+  dCtx.lineWidth   = s.sz;
+  dCtx.lineCap = 'round'; dCtx.lineJoin = 'round';
+  dCtx.shadowColor = s.color; dCtx.shadowBlur = s.sz * 2.2;
+  dCtx.beginPath();
+  dCtx.moveTo(s.pts[0].x, s.pts[0].y);
+  for(let i=1;i<s.pts.length;i++){
+    const p=s.pts[i-1], c=s.pts[i];
+    dCtx.quadraticCurveTo(p.x,p.y,(p.x+c.x)/2,(p.y+c.y)/2);
+  }
+  dCtx.stroke();
+  dCtx.restore();
+}
+
+// ═══════════════════════════════════════════════════════
+// COORDINATE HELPERS
+// ═══════════════════════════════════════════════════════
+// lm = normalised MediaPipe landmark {x,y,z}  (x=0 left, 1 right in selfie mode)
+// We mirror x because camera is mirrored
+function lm2cv(lm){ return { x:(1-lm.x)*drawCvs.width,  y:lm.y*drawCvs.height }; }
+function lm2sc(lm){ return { x:(1-lm.x)*window.innerWidth, y:lm.y*window.innerHeight }; }
+function lm2pip(lm){ return { x:(1-lm.x)*pipCvs.width, y:lm.y*pipCvs.height }; }
+
+// ═══════════════════════════════════════════════════════
+// GESTURE DETECTION
+// ═══════════════════════════════════════════════════════
+function handSpan(lm){
+  // wrist(0) → middle MCP(9) = normalised hand size
+  return Math.hypot(lm[0].x-lm[9].x, lm[0].y-lm[9].y) || 0.001;
+}
+function indexUp(lm){
+  // index tip(8) clearly above pip(6) relative to hand size
+  const span = handSpan(lm);
+  return (lm[6].y - lm[8].y) / span > 0.12;
+}
+function pinchRatio(lm){
+  // thumb tip(4) ↔ index tip(8) distance, normalised by hand size
+  return Math.hypot(lm[4].x-lm[8].x, lm[4].y-lm[8].y) / handSpan(lm);
+}
+function rawMode(lm){
+  const up   = indexUp(lm);
+  const pinch = pinchRatio(lm);
+  if(up && pinch < 0.32) return 'grab';
+  if(up)                  return 'draw';
+  return 'idle';
+}
+function debouncedMode(lm){
+  const r = rawMode(lm);
+  A.modeBuf.push(r);
+  if(A.modeBuf.length > A.DEBOUNCE) A.modeBuf.shift();
+  // switch only when last DEBOUNCE frames all agree
+  if(A.modeBuf.every(m => m===r)) return r;
+  return A.mode; // hold current
+}
+
+// ═══════════════════════════════════════════════════════
+// STROKE HIT-TEST
+// ═══════════════════════════════════════════════════════
+function strokeBBox(s){
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  for(const p of s.pts){
+    if(p.x<x0)x0=p.x; if(p.y<y0)y0=p.y;
+    if(p.x>x1)x1=p.x; if(p.y>y1)y1=p.y;
+  }
+  const pad=s.sz*3;
+  return {x0:x0-pad,y0:y0-pad,x1:x1+pad,y1:y1+pad};
+}
+function pickStroke(cx,cy){
+  for(let i=A.strokes.length-1;i>=0;i--){
+    const b=strokeBBox(A.strokes[i]);
+    if(cx>=b.x0&&cx<=b.x1&&cy>=b.y0&&cy<=b.y1) return i;
+  }
+  return -1;
+}
+
+// ═══════════════════════════════════════════════════════
+// TRAIL PARTICLES
+// ═══════════════════════════════════════════════════════
+const TNMAX=16;
+const tNodes=Array.from({length:TNMAX},()=>{
+  const el=document.createElement('div');
+  el.className='tr';
+  document.body.appendChild(el);
+  return {el,life:0,max:0};
+});
+let tIdx=0, tLX=-999, tLY=-999;
+function spawnTrail(x,y){
+  if(Math.hypot(x-tLX,y-tLY)<11) return;
+  tLX=x; tLY=y;
+  const t=tNodes[tIdx%TNMAX]; tIdx++;
+  const sz=3+Math.random()*5;
+  t.max=t.life=0.4+Math.random()*0.15;
+  t.el.style.cssText=`
+    display:block;width:${sz}px;height:${sz}px;
+    left:${x-sz/2+(Math.random()-.5)*7}px;
+    top:${y-sz/2+(Math.random()-.5)*7}px;
+    background:${A.color};
+    box-shadow:0 0 8px ${A.color};
+    opacity:.75;
+  `;
+}
+let prevT=performance.now();
+function tickTrails(){
+  const now=performance.now(), dt=(now-prevT)/1000; prevT=now;
+  for(const t of tNodes){
+    if(t.life<=0) continue;
+    t.life-=dt;
+    if(t.life<=0){ t.el.style.display='none'; continue; }
+    const a=t.life/t.max;
+    t.el.style.opacity=(a*.75).toFixed(2);
+    t.el.style.transform=`scale(${(.25+a*.75).toFixed(2)})`;
+  }
+  requestAnimationFrame(tickTrails);
+}
+requestAnimationFrame(tickTrails);
+
+// ═══════════════════════════════════════════════════════
+// CURSOR POSITION  (smooth display, direct draw coords)
+// ═══════════════════════════════════════════════════════
+let csX=-300, csY=-300;   // smoothed screen cursor
+let ctX=-300, ctY=-300;   // target (filtered landmark)
+const CLRP=0.5; // lerp for visual cursor (cosmetic only)
+
+function tickCursor(){
+  csX += (ctX-csX)*CLRP;
+  csY += (ctY-csY)*CLRP;
+  // Only show & move neon cursor in draw/idle mode
+  // In grab mode: hide neon cursor, show system cursor
+  if(A.mode==='grab'){
+    curEl.classList.remove('show');
+    document.body.classList.add('sys-cursor');
+  } else {
+    document.body.classList.remove('sys-cursor');
+    if(ctX > -200){
+      curEl.classList.add('show');
+      curEl.style.left = csX+'px';
+      curEl.style.top  = csY+'px';
+      if(A.mode==='draw') spawnTrail(csX, csY);
+    }
+  }
+  requestAnimationFrame(tickCursor);
+}
+requestAnimationFrame(tickCursor);
+
+// ═══════════════════════════════════════════════════════
+// PIP SKELETON OVERLAY
+// ═══════════════════════════════════════════════════════
+function drawPip(lm, mode){
+  pCtx.clearRect(0,0,pipCvs.width,pipCvs.height);
+  const col = mode==='draw' ? 'rgba(0,255,231,.85)'
+            : mode==='grab' ? 'rgba(255,230,0,.85)'
+            : 'rgba(255,255,255,.4)';
+  pCtx.save();
+  pCtx.strokeStyle=col; pCtx.lineWidth=1.6; pCtx.shadowColor=col; pCtx.shadowBlur=5;
+  pCtx.beginPath();
+  for(const[a,b] of CONN){
+    const pa=lm2pip(lm[a]), pb=lm2pip(lm[b]);
+    pCtx.moveTo(pa.x,pa.y); pCtx.lineTo(pb.x,pb.y);
+  }
+  pCtx.stroke();
+  const tc = mode==='draw'?'#00ffe7': mode==='grab'?'#ffe600':'#fff';
+  pCtx.fillStyle=tc; pCtx.shadowColor=tc; pCtx.shadowBlur=9;
+  for(const ti of TIPS){
+    const p=lm2pip(lm[ti]);
+    pCtx.beginPath(); pCtx.arc(p.x,p.y,3.2,0,Math.PI*2); pCtx.fill();
+  }
+  // Index tip ring
+  const it=lm2pip(lm[8]);
+  pCtx.beginPath(); pCtx.arc(it.x,it.y,7,0,Math.PI*2);
+  pCtx.strokeStyle=tc; pCtx.lineWidth=1.5; pCtx.shadowBlur=12; pCtx.stroke();
+  pCtx.restore();
+}
+
+// ═══════════════════════════════════════════════════════
+// CANVAS OVERLAY SKELETON
+// ═══════════════════════════════════════════════════════
+function drawOverlay(lm, itCV, ttCV, gcCV, mode){
+  oCtx.clearRect(0,0,overCvs.width,overCvs.height);
+  const col = mode==='draw'?'rgba(0,255,231,.15)'
+            : mode==='grab'?'rgba(255,230,0,.15)'
+            : 'rgba(255,255,255,.08)';
+  oCtx.save();
+  oCtx.strokeStyle=col; oCtx.lineWidth=1;
+  oCtx.beginPath();
+  for(const[a,b] of CONN){
+    const pa=lm2cv(lm[a]), pb=lm2cv(lm[b]);
+    oCtx.moveTo(pa.x,pa.y); oCtx.lineTo(pb.x,pb.y);
+  }
+  oCtx.stroke();
+  // joints
+  oCtx.fillStyle=col;
+  for(let i=0;i<lm.length;i++){
+    const p=lm2cv(lm[i]);
+    oCtx.beginPath(); oCtx.arc(p.x,p.y,1.6,0,Math.PI*2); oCtx.fill();
+  }
+  // index tip ring (only in draw/idle)
+  if(mode!=='grab'){
+    const tc=A.color;
+    oCtx.beginPath(); oCtx.arc(itCV.x,itCV.y,A.brushSz/2+4,0,Math.PI*2);
+    oCtx.strokeStyle=tc; oCtx.lineWidth=1.8; oCtx.shadowColor=tc; oCtx.shadowBlur=16; oCtx.stroke();
+    oCtx.beginPath(); oCtx.arc(itCV.x,itCV.y,2,0,Math.PI*2);
+    oCtx.fillStyle=tc; oCtx.shadowBlur=10; oCtx.fill();
+  }
+  // grab: thumb-index pinch line
+  if(mode==='grab'){
+    const pr=pinchRatio(lm);
+    const active=pr<0.32;
+    oCtx.beginPath(); oCtx.moveTo(itCV.x,itCV.y); oCtx.lineTo(ttCV.x,ttCV.y);
+    oCtx.strokeStyle=active?'#ffe600':'rgba(255,230,0,.3)';
+    oCtx.lineWidth=active?2:1; oCtx.shadowColor='#ffe600'; oCtx.shadowBlur=active?16:4; oCtx.stroke();
+    oCtx.beginPath(); oCtx.arc(gcCV.x,gcCV.y,active?9:4,0,Math.PI*2);
+    oCtx.fillStyle=active?'rgba(255,230,0,.4)':'rgba(255,230,0,.15)'; oCtx.shadowBlur=active?18:4; oCtx.fill();
+  }
+  oCtx.restore();
+}
+
+// ═══════════════════════════════════════════════════════
+// MAIN HAND RESULTS CALLBACK
+// ═══════════════════════════════════════════════════════
+function onResults(results){
+  const ts=performance.now();
+
+  // FPS counter
+  A.fpsN++;
+  if(ts-A.fpsT>=1000){ fpsEl.textContent=A.fpsN+' FPS'; A.fpsN=0; A.fpsT=ts; }
+
+  // ── No hand detected ──────────────────────────────────
+  if(!results.multiHandLandmarks?.length){
+    resetFilters();
+    A.modeBuf=[];
+    oCtx.clearRect(0,0,overCvs.width,overCvs.height);
+    pCtx.clearRect(0,0,pipCvs.width,pipCvs.height);
+    ctX=-300; ctY=-300; // push cursor off screen
+    // commit any live stroke
+    if(A.live?.pts.length>1) A.strokes.push(A.live);
+    A.live=null; A.grabbed=-1; A.grabOff=[];
+    if(A.mode!=='idle'){
+      A.mode='idle';
+      setBadge('idle');
+      document.body.classList.remove('sys-cursor');
+      redrawAll();
+    }
+    setS('NO HAND — SHOW HAND TO CAMERA','rgba(0,255,231,.35)');
+    return;
+  }
+
+  // ── Filter all 21 landmarks ───────────────────────────
+  const lm = filterLM(results.multiHandLandmarks[0], ts);
+
+  // ── Canvas-space coords for key landmarks ─────────────
+  const itCV = lm2cv(lm[8]);   // index tip
+  const ttCV = lm2cv(lm[4]);   // thumb tip
+  const gcCV = { x:(itCV.x+ttCV.x)/2, y:(itCV.y+ttCV.y)/2 }; // grab center
+
+  // ── Screen cursor position (filtered, index tip only, draw/idle mode) ──
+  const sc = lm2sc(lm[8]);
+  ctX = CF.x.run(sc.x, ts);
+  ctY = CF.y.run(sc.y, ts);
+
+  // ── Debounced mode ────────────────────────────────────
+  const newMode = debouncedMode(lm);
+
+  // ── Overlays ──────────────────────────────────────────
+  drawPip(lm, newMode);
+  drawOverlay(lm, itCV, ttCV, gcCV, newMode);
+
+  // ── Mode transition ───────────────────────────────────
+  if(newMode !== A.mode){
+    // leaving draw: commit stroke
+    if(A.mode==='draw' && A.live){
+      if(A.live.pts.length>1) A.strokes.push(A.live);
+      A.live=null; redrawAll();
+    }
+    // leaving grab: release
+    if(A.mode==='grab'){
+      A.grabbed=-1; A.grabOff=[];
+      CF.x.reset(); CF.y.reset(); // reset cursor so it reappears smoothly
+    }
+    A.mode=newMode;
+    setBadge(newMode);
+  }
+
+  // ── Mode actions ──────────────────────────────────────
+  if(A.mode==='draw'){
+    setS('✏ DRAW — MOVE INDEX FINGER', A.color);
+    // Use direct canvas coords (no lerp) for precise drawing
+    if(!A.live){
+      A.live={ pts:[{x:itCV.x,y:itCV.y}], color:A.color, sz:A.brushSz };
+    } else {
+      const last=A.live.pts.at(-1);
+      if(Math.hypot(itCV.x-last.x, itCV.y-last.y) > 1.2){
+        A.live.pts.push({x:itCV.x, y:itCV.y});
+        redrawAll();
+        paintStroke(A.live);
+      }
+    }
+
+  } else if(A.mode==='grab'){
+    const pr = pinchRatio(lm);
+    const pinched = pr < 0.32;
+    setS('🤏 PICK MODE — MOUSE CURSOR FREE  |  PINCH TO GRAB', '#ffe600');
+
+    if(pinched){
+      if(A.grabbed===-1){
+        const idx=pickStroke(gcCV.x, gcCV.y);
+        if(idx!==-1){
+          A.grabbed=idx;
+          A.grabOff=A.strokes[idx].pts.map(p=>({dx:p.x-gcCV.x,dy:p.y-gcCV.y}));
+          setS('🤏 GRABBED — DRAG TO MOVE','#ffe600');
+        }
+      } else {
+        // move grabbed stroke
+        const s=A.strokes[A.grabbed];
+        for(let i=0;i<s.pts.length;i++){
+          s.pts[i].x=gcCV.x+A.grabOff[i].dx;
+          s.pts[i].y=gcCV.y+A.grabOff[i].dy;
+        }
+        redrawAll();
+      }
+    } else {
+      if(A.grabbed!==-1){ A.grabbed=-1; A.grabOff=[]; setS('RELEASED','#ffe600'); }
+    }
+
+  } else {
+    setS('HAND DETECTED — ☝ INDEX=DRAW  🤏 PINCH=GRAB', A.color);
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// UI HELPERS
+// ═══════════════════════════════════════════════════════
+function setBadge(m){
+  badge.className='badge '+m;
+  badge.textContent = m==='draw'?'✏ DRAWING' : m==='grab'?'🤏 PICK — MOUSE FREE' : '';
+}
+function setS(msg,col){
+  stxt.textContent=msg;
+  stxt.style.color=col||'rgba(0,255,231,.3)';
+}
+function setP(pct,msg){
+  document.getElementById('lfill').style.width=pct+'%';
+  document.getElementById('lstep').textContent=msg;
+}
+
+// ═══════════════════════════════════════════════════════
+// START HAND TRACKING (after camera granted)
+// ═══════════════════════════════════════════════════════
+async function startTracking(stream){
+  document.getElementById('permScreen').style.display='none';
+  const loader=document.getElementById('loader');
+  loader.style.display='flex';
+  setP(10,'STARTING CAMERA...');
+
+  rawVideo.srcObject = stream;
+  pipVid.srcObject   = stream;
+  await new Promise(res=>{ rawVideo.onloadedmetadata=res; });
+  await rawVideo.play();
+  pipVid.play().catch(()=>{});
+
+  setP(30,'LOADING MEDIAPIPE...');
+
+  const hands = new Hands({
+    locateFile: f=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
+  });
+  hands.setOptions({
+    maxNumHands: 1,
+    modelComplexity: 1,
+    minDetectionConfidence: 0.80,
+    minTrackingConfidence: 0.80,
+  });
+  hands.onResults(onResults);
+
+  setP(60,'INITIALIZING MODEL...');
+  // warm-up frame
+  await hands.send({image:rawVideo});
+  setP(85,'CALIBRATING...');
+  await new Promise(res=>setTimeout(res,500));
+  setP(100,'READY!');
+  await new Promise(res=>setTimeout(res,380));
+
+  loader.style.display='none';
+  resize();
+  setS('CAMERA ACTIVE — SHOW YOUR HAND ☝','#00ffe7');
+
+  // main loop — requestAnimationFrame drives hands.send
+  async function loop(){
+    await hands.send({image:rawVideo});
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+}
+
+// ═══════════════════════════════════════════════════════
+// PERMISSION BUTTON
+// ═══════════════════════════════════════════════════════
+document.getElementById('allowBtn').addEventListener('click', async()=>{
+  const btn=document.getElementById('allowBtn');
+  const err=document.getElementById('permErr');
+  btn.textContent='⏳ REQUESTING...'; btn.disabled=true; err.style.display='none';
+
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video:{
+        width:{ideal:1280}, height:{ideal:720},
+        facingMode:'user', frameRate:{ideal:60}
+      }
+    });
+    await startTracking(stream);
+  } catch(e){
+    btn.disabled=false; btn.textContent='⬡ ALLOW CAMERA ACCESS';
+    let msg='';
+    if(e.name==='NotAllowedError')     msg='⚠ Permission denied. Click Allow in the browser popup, or go to browser Settings → Camera → Allow.';
+    else if(e.name==='NotFoundError')  msg='⚠ No camera found. Connect a webcam and retry.';
+    else if(e.name==='NotReadableError') msg='⚠ Camera in use by another app. Close it and retry.';
+    else if(location.protocol==='file:') msg='⚠ file:// URLs block camera. Serve via localhost (VS Code Live Server, python -m http.server).';
+    else msg='⚠ '+e.message;
+    err.textContent=msg; err.style.display='block';
+  }
+});
+
+// ═══════════════════════════════════════════════════════
+// MOUSE FALLBACK (skip button)
+// ═══════════════════════════════════════════════════════
+function enableMouse(){
+  document.getElementById('permScreen').style.display='none';
+  document.body.classList.remove('sys-cursor'); // keep hand cursor hidden, use mouse style
+  // In mouse mode we just draw normally; system cursor is visible
+  document.body.style.cursor='crosshair';
+  let down=false, cur=null;
+  document.addEventListener('mousemove', e=>{
+    // move neon cursor with mouse in mouse-only mode
+    ctX=e.clientX; ctY=e.clientY;
+    if(down) A.mode='draw'; else A.mode='idle';
+  });
+  cwEl.addEventListener('mousedown', e=>{
+    const r=cwEl.getBoundingClientRect();
+    down=true; A.mode='draw'; setBadge('draw');
+    cur={pts:[{x:e.clientX-r.left,y:e.clientY-r.top}],color:A.color,sz:A.brushSz};
+  });
+  cwEl.addEventListener('mousemove', e=>{
+    if(!down||!cur) return;
+    const r=cwEl.getBoundingClientRect();
+    cur.pts.push({x:e.clientX-r.left,y:e.clientY-r.top});
+    redrawAll(); paintStroke(cur);
+  });
+  cwEl.addEventListener('mouseup', ()=>{
+    if(cur?.pts.length>1){ A.strokes.push(cur); redrawAll(); }
+    down=false; cur=null; A.mode='idle'; setBadge('idle');
+  });
+  cwEl.addEventListener('mouseleave',()=>{
+    if(cur?.pts.length>1){ A.strokes.push(cur); redrawAll(); }
+    down=false; cur=null; A.mode='idle'; setBadge('idle');
+  });
+  setS('MOUSE MODE — CLICK AND DRAG TO DRAW','rgba(0,255,231,.5)');
+}
+
+// Skip button
+const skipBtn=document.createElement('button');
+skipBtn.textContent='skip — use mouse instead';
+skipBtn.style.cssText='background:none;border:none;color:rgba(0,255,231,.28);font-family:"Share Tech Mono",monospace;font-size:.48rem;letter-spacing:.1em;cursor:pointer;text-decoration:underline;text-underline-offset:3px;margin-top:-6px;';
+skipBtn.addEventListener('click',()=>{ resize(); enableMouse(); });
+document.getElementById('permScreen').appendChild(skipBtn);
+
+// ═══════════════════════════════════════════════════════
+// BOOT
+// ═══════════════════════════════════════════════════════
+window.addEventListener('load', resize);
+</script>
+</body>
+</html>
