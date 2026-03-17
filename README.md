@@ -30,7 +30,7 @@ python -m http.server 8080
 npx serve .
 ```
 
-Then open `http://localhost:8080/neon-hand-draw.html` in Chrome or Edge.
+Then open `http://localhost:8080/neon-hand-control.html` in Chrome or Edge.
 
 Or deploy to **GitHub Pages** and get a live HTTPS link for free.
 
